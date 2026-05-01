@@ -1,22 +1,72 @@
-"""Pydantic schemas for the chat API."""
+"""Pydantic schemas for chat threads and messages."""
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
+from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+Role = Literal["user", "assistant", "system"]
 
 
+# --------------------------------------------------------------------------- #
+# Existing send-message schema (kept for the LLM endpoint).                    #
+# --------------------------------------------------------------------------- #
 class ChatTurn(BaseModel):
-    role: Literal["user", "assistant"]
+    role: Role
     content: str
 
 
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=8000)
     history: list[ChatTurn] = Field(default_factory=list)
+    thread_id: UUID | None = None
 
 
 class ChatResponse(BaseModel):
     reply: str
     model: str
+    thread_id: UUID
+    user_message_id: UUID
+    assistant_message_id: UUID
+
+
+# --------------------------------------------------------------------------- #
+# Storage schemas                                                              #
+# --------------------------------------------------------------------------- #
+class ChatMessageRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    thread_id: UUID
+    role: Role
+    content: str
+    created_at: datetime
+
+
+class ThreadRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    title: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ThreadWithMessages(ThreadRead):
+    messages: list[ChatMessageRead] = Field(default_factory=list)
+
+
+class ThreadCreate(BaseModel):
+    title: str | None = Field(default=None, max_length=255)
+
+
+class ThreadUpdate(BaseModel):
+    title: str | None = Field(default=None, max_length=255)
+
+
+class MessageCreate(BaseModel):
+    role: Role = "user"
+    content: str = Field(..., min_length=1, max_length=8000)

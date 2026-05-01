@@ -33,6 +33,31 @@ class Settings(BaseSettings):
     jwt_algorithm: str = Field(default="HS256")
     jwt_expire_minutes: int = Field(default=60)
 
+    # Auth cookie
+    auth_cookie_name: str = Field(default="access_token")
+    auth_cookie_secure: bool = Field(default=False)  # set True in prod (HTTPS)
+    auth_cookie_samesite: str = Field(default="lax")  # "lax" | "strict" | "none"
+    auth_cookie_domain: str | None = None
+
+    # Google OAuth
+    google_client_id: str | None = None
+    google_client_secret: str | None = None
+    google_redirect_uri: str = Field(
+        default="http://localhost:8000/api/v1/auth/google/callback"
+    )
+    # Where to send the user after a successful Google sign-in
+    frontend_url: str = Field(default="http://localhost:5174")
+    # Optional: restrict logins to these email domains (CSV), e.g. "amzur.com"
+    allowed_email_domains: str = Field(default="")
+
+    @property
+    def allowed_email_domains_list(self) -> list[str]:
+        return [
+            d.strip().lower()
+            for d in self.allowed_email_domains.split(",")
+            if d.strip()
+        ]
+
     # LLM Gateway
     litellm_proxy_url: str | None = None
     litellm_api_key: str | None = None

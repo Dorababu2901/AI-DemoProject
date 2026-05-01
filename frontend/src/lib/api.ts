@@ -69,6 +69,7 @@ async function request<T>({
   const response = await fetch(url, {
     method,
     headers: finalHeaders,
+    credentials: "include",
     body:
       body === undefined
         ? undefined
