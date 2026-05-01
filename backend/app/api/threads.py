@@ -36,9 +36,8 @@ def create_my_thread(
     current_user: CurrentUser,
     db: DbSession,
 ):
-    return chat_service.create_thread(
-        db, user_id=current_user.id, title=payload.title
-    )
+    title = (payload.title or "").strip() or "New chat"
+    return chat_service.create_thread(db, user_id=current_user.id, title=title)
 
 
 @router.get("/{thread_id}", response_model=ThreadWithMessages)

@@ -1,6 +1,12 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, ApiError } from "../../lib/api";
+import {
+  threadsApi,
+  type ChatMessageRead,
+  type ThreadSummary,
+} from "../../lib/threads";
+import ThreadList from "./ThreadList";
 
 interface Message {
   id: string;
@@ -16,26 +22,12 @@ interface ChatResponse {
   assistant_message_id: string;
 }
 
-interface ThreadSummary {
-  id: string;
-  title: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-interface ChatMessageRead {
-  id: string;
-  thread_id: string;
-  role: "user" | "assistant" | "system";
-  content: string;
-  created_at: string;
-}
-
-interface ThreadWithMessages extends ThreadSummary {
-  messages: ChatMessageRead[];
-}
-
 const ACTIVE_THREAD_KEY = "active_thread_id";
+
+function toMessage(m: ChatMessageRead): Message | null {
+  if (m.role !== "user" && m.role !== "assistant") return null;
+  return { id: m.id, role: m.role, content: m.content };
+}
 
 export default function ChatWindow() {
   const navigate = useNavigate();
@@ -48,29 +40,28 @@ export default function ChatWindow() {
     () => localStorage.getItem(ACTIVE_THREAD_KEY),
   );
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
+  const [busyThreadId, setBusyThreadId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  // Persist the active thread id so a refresh restores the conversation.
+  // Persist active thread id so refresh restores the conversation.
   useEffect(() => {
     if (threadId) localStorage.setItem(ACTIVE_THREAD_KEY, threadId);
     else localStorage.removeItem(ACTIVE_THREAD_KEY);
   }, [threadId]);
 
-  // On mount: load the user's threads and, if we know an active one, its messages.
+  // Initial load.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       setLoading(true);
       try {
-        const list = await api.get<ThreadSummary[]>("/api/v1/threads");
+        const list = await threadsApi.list();
         if (cancelled) return;
         setThreads(list);
-
         const activeId = threadId ?? list[0]?.id ?? null;
-        if (activeId) {
-          await loadThread(activeId, cancelled);
-        }
+        if (activeId) await loadThread(activeId, cancelled);
       } catch {
-        // ignore — user might just be unauthenticated; RequireAuth handles redirect
+        // unauthenticated → RequireAuth handles redirect
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -81,33 +72,78 @@ export default function ChatWindow() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  async function refreshThreads() {
+    try {
+      const list = await threadsApi.list();
+      setThreads(list);
+    } catch {
+      // ignore
+    }
+  }
+
   async function loadThread(id: string, cancelled = false) {
     try {
-      const t = await api.get<ThreadWithMessages>(`/api/v1/threads/${id}`);
+      const t = await threadsApi.get(id);
       if (cancelled) return;
       setThreadId(t.id);
-      setMessages(
-        t.messages
-          .filter((m) => m.role === "user" || m.role === "assistant")
-          .map((m) => ({
-            id: m.id,
-            role: m.role as "user" | "assistant",
-            content: m.content,
-          })),
-      );
+      setMessages(t.messages.map(toMessage).filter((x): x is Message => !!x));
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) {
-        // Thread was deleted server-side; reset.
         setThreadId(null);
         setMessages([]);
       }
     }
   }
 
-  function newThread() {
-    setThreadId(null);
-    setMessages([]);
-    setModel(null);
+  async function handleCreate() {
+    setError(null);
+    try {
+      const t = await threadsApi.create();
+      setThreads((prev) => [t, ...prev]);
+      setThreadId(t.id);
+      setMessages([]);
+      setModel(null);
+    } catch (err) {
+      setError(err instanceof ApiError ? `Create failed (${err.status})` : "Create failed");
+    }
+  }
+
+  async function handleRename(id: string, title: string) {
+    setError(null);
+    setBusyThreadId(id);
+    const previous = threads;
+    setThreads((prev) =>
+      prev.map((t) => (t.id === id ? { ...t, title } : t)),
+    );
+    try {
+      const updated = await threadsApi.rename(id, title);
+      setThreads((prev) => prev.map((t) => (t.id === id ? updated : t)));
+    } catch (err) {
+      setThreads(previous);
+      setError(err instanceof ApiError ? `Rename failed (${err.status})` : "Rename failed");
+    } finally {
+      setBusyThreadId(null);
+    }
+  }
+
+  async function handleDelete(id: string) {
+    setError(null);
+    setBusyThreadId(id);
+    const previous = threads;
+    setThreads((prev) => prev.filter((t) => t.id !== id));
+    try {
+      await threadsApi.remove(id);
+      if (id === threadId) {
+        setThreadId(null);
+        setMessages([]);
+        setModel(null);
+      }
+    } catch (err) {
+      setThreads(previous);
+      setError(err instanceof ApiError ? `Delete failed (${err.status})` : "Delete failed");
+    } finally {
+      setBusyThreadId(null);
+    }
   }
 
   function logout() {
@@ -147,11 +183,7 @@ export default function ChatWindow() {
           content: data.reply,
         },
       ]);
-      // Refresh the sidebar so the new/updated thread bubbles up.
-      api
-        .get<ThreadSummary[]>("/api/v1/threads")
-        .then(setThreads)
-        .catch(() => undefined);
+      refreshThreads();
     } catch (err) {
       const msg =
         err instanceof ApiError
@@ -170,38 +202,15 @@ export default function ChatWindow() {
 
   return (
     <div className="flex h-screen bg-slate-50">
-      <aside className="hidden w-64 flex-col border-r border-slate-200 bg-white md:flex">
-        <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
-          <span className="text-sm font-semibold text-slate-700">
-            Conversations
-          </span>
-          <button
-            onClick={newThread}
-            className="rounded-md bg-blue-600 px-2 py-1 text-xs font-medium text-white hover:bg-blue-700"
-          >
-            + New
-          </button>
-        </div>
-        <div className="flex-1 overflow-y-auto">
-          {threads.length === 0 && (
-            <p className="px-4 py-3 text-xs text-slate-400">No chats yet.</p>
-          )}
-          {threads.map((t) => (
-            <button
-              key={t.id}
-              onClick={() => loadThread(t.id)}
-              className={`block w-full truncate px-4 py-2 text-left text-sm ${
-                t.id === threadId
-                  ? "bg-blue-50 font-medium text-blue-700"
-                  : "text-slate-700 hover:bg-slate-50"
-              }`}
-              title={t.title ?? "(untitled)"}
-            >
-              {t.title?.trim() || "(untitled)"}
-            </button>
-          ))}
-        </div>
-      </aside>
+      <ThreadList
+        threads={threads}
+        activeId={threadId}
+        busyId={busyThreadId}
+        onSelect={(id) => loadThread(id)}
+        onCreate={handleCreate}
+        onRename={handleRename}
+        onDelete={handleDelete}
+      />
 
       <div className="flex flex-1 flex-col">
         <header className="flex items-center justify-between border-b border-slate-200 bg-white px-6 py-3">
@@ -216,6 +225,18 @@ export default function ChatWindow() {
             Sign out
           </button>
         </header>
+
+        {error && (
+          <div className="border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+            {error}
+            <button
+              onClick={() => setError(null)}
+              className="ml-2 text-red-700 hover:underline"
+            >
+              dismiss
+            </button>
+          </div>
+        )}
 
         <div className="flex-1 overflow-y-auto px-4 py-6">
           <div className="mx-auto flex max-w-3xl flex-col gap-3">

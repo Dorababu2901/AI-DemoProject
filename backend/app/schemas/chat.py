@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 Role = Literal["user", "assistant", "system"]
 
@@ -65,6 +65,16 @@ class ThreadCreate(BaseModel):
 
 class ThreadUpdate(BaseModel):
     title: str | None = Field(default=None, max_length=255)
+
+    @field_validator("title")
+    @classmethod
+    def _strip_or_reject(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("title must not be empty or whitespace")
+        return stripped
 
 
 class MessageCreate(BaseModel):
