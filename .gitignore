@@ -35,3 +35,8 @@ backend/out.txt
 
 backend/storage/images/
 
+# RAG runtime data (do NOT commit user PDFs or vector DB contents)
+backend/storage/
+backend/chroma_db/
+backend/storage/chroma/
+backend/storage/attachments/

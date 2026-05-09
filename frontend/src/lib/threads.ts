@@ -22,6 +22,10 @@ export interface ServerAttachment {
   mime?: string;
   name?: string;
   prompt?: string;
+  /** RAG citation: attachment id of the cited PDF. */
+  attachment_id?: string;
+  /** RAG citation: page number within the cited PDF. */
+  page?: number;
 }
 
 export interface ThreadWithMessages extends ThreadSummary {

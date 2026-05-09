@@ -16,7 +16,13 @@ asyncpg>=0.29.0
 langchain>=0.2.11
 langchain-community>=0.2.10
 langchain-core>=0.2.27
+langchain-text-splitters>=0.2.2
 litellm>=1.43.0
+openai>=1.40.0
+
+# RAG: vector store + PDF parsing
+chromadb>=0.5.5
+pypdf>=4.3.0
 
 # Auth & security
 python-jose[cryptography]>=3.3.0

@@ -101,7 +101,17 @@ class Settings(BaseSettings):
 
     # Vector store / RAG
     vector_store_url: str | None = None
-    embedding_model: str = Field(default="text-embedding-3-small")
+    embedding_model: str = Field(default="text-embedding-3-large")
+    # Where Chroma persists its on-disk SQLite + parquet files.
+    # Resolved relative to the backend root if a relative path is given.
+    chroma_persist_dir: str = Field(default="storage/chroma")
+    # Where uploaded PDFs are saved on disk (per-user subfolder).
+    attachments_dir: str = Field(default="storage/attachments")
+    # RAG retrieval params
+    rag_top_k: int = Field(default=6)
+    rag_chunk_size: int = Field(default=800)       # ~ tokens-equivalent (chars/4 ≈ tokens)
+    rag_chunk_overlap: int = Field(default=120)
+    rag_max_pdf_bytes: int = Field(default=20 * 1024 * 1024)
 
     # CORS
     cors_origins: str = Field(default="http://localhost:5173")

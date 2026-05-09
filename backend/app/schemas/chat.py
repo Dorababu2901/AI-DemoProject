@@ -49,6 +49,8 @@ class ChatRequest(BaseModel):
     history: list[ChatTurn] = Field(default_factory=list)
     thread_id: UUID | None = None
     attachments: list[ChatAttachment] = Field(default_factory=list, max_length=10)
+    # When False, the backend skips ChromaDB retrieval even if PDFs are indexed.
+    rag_enabled: bool = True
 
 
 class ChatResponse(BaseModel):

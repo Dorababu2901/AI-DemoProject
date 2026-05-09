@@ -12,7 +12,9 @@ import {
   inlineSnippetAttachment,
   type ChatAttachment,
 } from "../../lib/attachments";
+import { pdfApi } from "../../lib/pdfAttachments";
 import AttachmentList from "../attachments/AttachmentList";
+import PdfPanel from "../attachments/PdfPanel";
 import RichContent from "./RichContent";
 import ThreadList from "./ThreadList";
 
@@ -67,6 +69,8 @@ export default function ChatWindow() {
   const [snippetLang, setSnippetLang] = useState("");
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const [generatingImage, setGeneratingImage] = useState(false);
+  const [pdfRefreshKey, setPdfRefreshKey] = useState(0);
+  const [ragEnabled, setRagEnabled] = useState(true);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Persist active thread id so refresh restores the conversation.
@@ -189,11 +193,43 @@ export default function ChatWindow() {
     setError(null);
     try {
       const next: ChatAttachment[] = [];
-      for (const f of files) next.push(await fileToAttachment(f));
-      setAttachments((prev) => [...prev, ...next].slice(0, 10));
+      for (const f of files) {
+        // PDFs go through the dedicated RAG upload endpoint instead of being
+        // inlined into the chat payload.
+        const isPdf =
+          f.type === "application/pdf" ||
+          f.name.toLowerCase().endsWith(".pdf");
+        if (isPdf) {
+          const tid = await ensureThread();
+          await pdfApi.upload(tid, f);
+          // The PdfPanel's own polling will pick this up on its next thread load;
+          // force a refresh by toggling a key on it via threadId is not needed
+          // because the panel re-fetches when threadId changes. Instead, we
+          // emit a small custom event the panel can listen to — simplest: just
+          // reload the panel by bumping a counter.
+          setPdfRefreshKey((n) => n + 1);
+          continue;
+        }
+        next.push(await fileToAttachment(f));
+      }
+      if (next.length) setAttachments((prev) => [...prev, ...next].slice(0, 10));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to read file");
     }
+  }
+
+  /**
+   * Ensure the user has an active thread; create one if not. Returns its id.
+   * Used by the PDF upload flow which needs a thread to attach to.
+   */
+  async function ensureThread(): Promise<string> {
+    if (threadId) return threadId;
+    const t = await threadsApi.create();
+    setThreads((prev) => [t, ...prev]);
+    setThreadId(t.id);
+    setMessages([]);
+    setModel(null);
+    return t.id;
   }
 
   function addSnippet() {
@@ -237,6 +273,7 @@ export default function ChatWindow() {
         message: messageText,
         thread_id: threadId,
         attachments: sentAttachments,
+        rag_enabled: ragEnabled,
       });
       setModel(data.model);
       setThreadId(data.thread_id);
@@ -364,6 +401,31 @@ export default function ChatWindow() {
                   )}
                   {m.serverAttachments && m.serverAttachments.length > 0 && (
                     <div className="mt-2 flex flex-col gap-2">
+                      {m.serverAttachments.some((a) => a.kind === "file" && a.attachment_id) && (
+                        <div className="flex flex-wrap gap-1.5">
+                          {m.serverAttachments
+                            .filter((a) => a.kind === "file" && a.attachment_id)
+                            .map((c, i) => {
+                              const href = pdfApi.fileUrl(c.attachment_id!, c.page);
+                              return (
+                                <a
+                                  key={`cite-${i}`}
+                                  href={href}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  title={`Open ${c.name ?? "PDF"}${c.page ? ` at p.${c.page}` : ""}`}
+                                  className="inline-flex items-center gap-1 rounded-full border border-slate-300 bg-slate-50 px-2 py-0.5 text-[11px] text-slate-700 hover:bg-slate-100"
+                                >
+                                  <span>📎</span>
+                                  <span className="max-w-[180px] truncate">
+                                    {c.name ?? "source"}
+                                    {c.page ? ` p.${c.page}` : ""}
+                                  </span>
+                                </a>
+                              );
+                            })}
+                        </div>
+                      )}
                       {m.serverAttachments.map((att, i) => {
                         const src =
                           att.url && att.url.startsWith("http")
@@ -419,6 +481,13 @@ export default function ChatWindow() {
           className="border-t border-slate-200 bg-white px-4 py-3"
         >
           <div className="mx-auto flex max-w-3xl flex-col gap-2">
+            <PdfPanel
+              key={`${threadId ?? "none"}:${pdfRefreshKey}`}
+              threadId={threadId}
+              onEnsureThread={ensureThread}
+              ragEnabled={ragEnabled}
+              onRagEnabledChange={setRagEnabled}
+            />
             {attachments.length > 0 && (
               <AttachmentList
                 items={attachments}
@@ -482,7 +551,7 @@ export default function ChatWindow() {
                 ref={fileInputRef}
                 type="file"
                 multiple
-                accept="image/*,video/*,.csv,.xlsx,.xls,.tex,.mml,.txt,.md,.json,.js,.jsx,.ts,.tsx,.py,.java,.c,.cc,.cpp,.h,.cs,.go,.rs,.rb,.php,.sh,.sql,.yml,.yaml,.html,.css"
+                accept="image/*,video/*,.pdf,.csv,.xlsx,.xls,.tex,.mml,.txt,.md,.json,.js,.jsx,.ts,.tsx,.py,.java,.c,.cc,.cpp,.h,.cs,.go,.rs,.rb,.php,.sh,.sql,.yml,.yaml,.html,.css"
                 onChange={handleFiles}
                 className="hidden"
               />

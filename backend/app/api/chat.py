@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from typing import Annotated
 
@@ -11,12 +12,14 @@ from sqlalchemy.orm import Session
 
 from app.ai.image_gen import ImageGenError, generate_image
 from app.ai.llm import generate_reply
+from app.ai.rag import retrieve, build_context_block
+from app.ai.rag.retriever import RAG_SYSTEM_INSTRUCTIONS
 from app.api.deps import CurrentUser
 from app.api.images import IMAGES_DIR
 from app.core.config import get_settings
 from app.db.session import get_db
 from app.schemas.chat import ChatRequest, ChatResponse, ChatTurn
-from app.services import chat_service
+from app.services import attachment_service, chat_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -30,6 +33,21 @@ _MIME_EXT = {
     "image/jpg": "jpg",
     "image/webp": "webp",
 }
+
+# Matches inline citation markers like "[filename.pdf p.4]" or "[doc.pdf, p. 12]".
+_CITATION_RE = re.compile(
+    r"\[[^\[\]\n]{1,200}?\.pdf[^\[\]\n]{0,40}?p\.\s*\d{1,5}\]",
+    re.IGNORECASE,
+)
+
+# Inserted in front of the user message when the client turns RAG OFF, to
+# stop the model from parroting earlier RAG-grounded answers.
+_RAG_OFF_INSTRUCTION = (
+    "Note: Document retrieval (RAG) is currently OFF. Answer this question "
+    "from your own general knowledge only. Do NOT use, quote, or cite any "
+    "previously discussed PDF excerpts, and do NOT include bracketed "
+    "citations like [filename.pdf p.N]."
+)
 
 
 @router.post("/send", response_model=ChatResponse)
@@ -107,17 +125,92 @@ async def send_message(
         if memory and memory[-1]["role"] == "user":
             memory = memory[:-1]
 
+        # When RAG is OFF, strip citation markers like "[file.pdf p.4]" from
+        # prior assistant turns so the LLM doesn't keep parroting them.
+        if not payload.rag_enabled:
+            cleaned: list[dict[str, str]] = []
+            for m in memory:
+                if m["role"] == "assistant":
+                    cleaned.append(
+                        {
+                            "role": "assistant",
+                            "content": _CITATION_RE.sub("", m["content"]).strip(),
+                        }
+                    )
+                else:
+                    cleaned.append(m)
+            memory = cleaned
+
         history = [ChatTurn(role=m["role"], content=m["content"]) for m in memory]
+
+        # 3c. RAG: if this thread has indexed PDFs and the client did not
+        # disable retrieval, fetch relevant chunks and inject them into the
+        # prompt as a labeled context block.
+        rag_hits = []
+        rag_attachments_meta: list[dict] = []
+        indexed = (
+            attachment_service.list_indexed_for_thread(
+                db, thread_id=thread.id, user_id=current_user.id
+            )
+            if payload.rag_enabled
+            else []
+        )
+        logger.info(
+            "Chat send: thread=%s rag_enabled=%s indexed_pdfs=%d",
+            thread.id, payload.rag_enabled, len(indexed),
+        )
+        if indexed:
+            try:
+                rag_hits = retrieve(
+                    user_id=current_user.id,
+                    query=payload.message,
+                    attachment_ids=[a.id for a in indexed],
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("RAG retrieval failed for thread %s", thread.id)
+                rag_hits = []
+
+        if rag_hits:
+            context = build_context_block(rag_hits)
+            augmented_message = (
+                f"{RAG_SYSTEM_INSTRUCTIONS}\n\n"
+                f"{context}\n\n"
+                f"User question: {payload.message}"
+            )
+            # Citations to surface to the UI alongside the assistant message.
+            seen: set[tuple[str, int]] = set()
+            for h in rag_hits:
+                key = (h.filename, h.page)
+                if key in seen:
+                    continue
+                seen.add(key)
+                rag_attachments_meta.append(
+                    {
+                        "kind": "file",
+                        "name": h.filename,
+                        "mime": "application/pdf",
+                        "prompt": f"p.{h.page}",
+                        "attachment_id": h.attachment_id,
+                        "page": h.page,
+                    }
+                )
+        elif not payload.rag_enabled:
+            augmented_message = f"{_RAG_OFF_INSTRUCTION}\n\nUser question: {payload.message}"
+        else:
+            augmented_message = payload.message
 
         # 4. Call the LLM.
         try:
-            reply = await generate_reply(payload.message, history, payload.attachments)
+            reply = await generate_reply(augmented_message, history, payload.attachments)
         except Exception as exc:  # noqa: BLE001 — surface as 502 to the client
             logger.exception("LLM call failed for user %s", current_user.id)
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=f"LLM call failed: {exc}",
             ) from exc
+
+        if rag_attachments_meta:
+            assistant_attachments = rag_attachments_meta
 
     # 5. Persist the assistant message.
     assistant_msg = chat_service.add_message(
