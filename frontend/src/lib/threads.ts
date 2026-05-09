@@ -13,6 +13,15 @@ export interface ChatMessageRead {
   role: "user" | "assistant" | "system";
   content: string;
   created_at: string;
+  attachments?: ServerAttachment[] | null;
+}
+
+export interface ServerAttachment {
+  kind: "image" | "file" | "video" | "table" | "formula" | "code";
+  url?: string;
+  mime?: string;
+  name?: string;
+  prompt?: string;
 }
 
 export interface ThreadWithMessages extends ThreadSummary {

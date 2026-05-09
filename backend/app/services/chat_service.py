@@ -7,6 +7,7 @@ user's threads. Thread + message fetches eager-load relationships with
 
 from __future__ import annotations
 
+import re
 from typing import Sequence
 from uuid import UUID
 
@@ -16,6 +17,30 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models.chat_message import ChatMessage
 from app.models.thread import Thread
+
+
+# Lightweight heuristic for "please draw / generate an image" requests.
+_IMAGE_INTENT_RE = re.compile(
+    r"\b("
+    r"draw|sketch|paint|illustrate|render|generate|create|make|show|design"
+    r")\b[^.?!]{0,80}\b("
+    r"image|picture|photo|illustration|drawing|painting|art|logo|icon|wallpaper|render|scene"
+    r")\b",
+    re.IGNORECASE,
+)
+_IMAGE_PREFIX_RE = re.compile(
+    r"^\s*(draw|sketch|paint|illustrate|render|imagine|generate an image of)\b",
+    re.IGNORECASE,
+)
+
+
+def is_image_request(message: str) -> bool:
+    """Heuristic: True if the user is asking for image generation."""
+    if not message:
+        return False
+    if _IMAGE_PREFIX_RE.search(message):
+        return True
+    return bool(_IMAGE_INTENT_RE.search(message))
 
 
 # --------------------------------------------------------------------------- #
@@ -111,11 +136,17 @@ def add_message(
     user_id: UUID,
     role: str,
     content: str,
+    attachments: list[dict] | None = None,
     commit: bool = True,
 ) -> ChatMessage:
     """Append a single message to a thread (after ownership check)."""
     get_thread(db, thread_id=thread_id, user_id=user_id)
-    message = ChatMessage(thread_id=thread_id, role=role, content=content)
+    message = ChatMessage(
+        thread_id=thread_id,
+        role=role,
+        content=content,
+        attachments=attachments,
+    )
     db.add(message)
     if commit:
         db.commit()

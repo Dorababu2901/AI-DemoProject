@@ -32,3 +32,6 @@ Thumbs.db
 build/
 *.log
 backend/out.txt
+
+backend/storage/images/
+

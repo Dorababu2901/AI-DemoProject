@@ -19,10 +19,36 @@ class ChatTurn(BaseModel):
     content: str
 
 
+# --------------------------------------------------------------------------- #
+# Attachments — multi-format inputs from the chat UI.                          #
+# --------------------------------------------------------------------------- #
+AttachmentKind = Literal["image", "video", "table", "formula", "code", "file"]
+
+
+class ChatAttachment(BaseModel):
+    """One attachment from the UI.
+
+    - `kind` drives how the backend renders it into the LLM prompt.
+    - For images: `data` is a data URL (data:image/png;base64,...) used directly
+      by vision-capable models (Gemini, GPT-4o, Claude).
+    - For text-like attachments (table / formula / code / file): `text` carries
+      the raw content which is inlined into the user prompt.
+    - `name` and `mime` are optional metadata used for labeling.
+    """
+
+    kind: AttachmentKind
+    name: str | None = Field(default=None, max_length=255)
+    mime: str | None = Field(default=None, max_length=100)
+    text: str | None = Field(default=None, max_length=200_000)
+    data: str | None = Field(default=None, max_length=15_000_000)
+    language: str | None = Field(default=None, max_length=40)
+
+
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=8000)
     history: list[ChatTurn] = Field(default_factory=list)
     thread_id: UUID | None = None
+    attachments: list[ChatAttachment] = Field(default_factory=list, max_length=10)
 
 
 class ChatResponse(BaseModel):
@@ -31,6 +57,7 @@ class ChatResponse(BaseModel):
     thread_id: UUID
     user_message_id: UUID
     assistant_message_id: UUID
+    attachments: list[dict] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #
@@ -44,6 +71,7 @@ class ChatMessageRead(BaseModel):
     role: Role
     content: str
     created_at: datetime
+    attachments: list[dict] | None = None
 
 
 class ThreadRead(BaseModel):

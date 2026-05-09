@@ -1,17 +1,27 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import { api, ApiError } from "../../lib/api";
+import { api, API_BASE_URL, ApiError } from "../../lib/api";
 import {
   threadsApi,
   type ChatMessageRead,
+  type ServerAttachment,
   type ThreadSummary,
 } from "../../lib/threads";
+import {
+  fileToAttachment,
+  inlineSnippetAttachment,
+  type ChatAttachment,
+} from "../../lib/attachments";
+import AttachmentList from "../attachments/AttachmentList";
+import RichContent from "./RichContent";
 import ThreadList from "./ThreadList";
 
 interface Message {
   id: string;
   role: "user" | "assistant";
   content: string;
+  attachments?: ChatAttachment[];
+  serverAttachments?: ServerAttachment[];
 }
 
 interface ChatResponse {
@@ -20,14 +30,23 @@ interface ChatResponse {
   thread_id: string;
   user_message_id: string;
   assistant_message_id: string;
+  attachments?: ServerAttachment[];
 }
 
 const ACTIVE_THREAD_KEY = "active_thread_id";
 
 function toMessage(m: ChatMessageRead): Message | null {
   if (m.role !== "user" && m.role !== "assistant") return null;
-  return { id: m.id, role: m.role, content: m.content };
+  return {
+    id: m.id,
+    role: m.role,
+    content: m.content,
+    serverAttachments: m.attachments ?? undefined,
+  };
 }
+
+const IMAGE_INTENT_RE =
+  /\b(draw|sketch|paint|illustrate|render|imagine|generate (an? )?image|picture|photo)\b/i;
 
 export default function ChatWindow() {
   const navigate = useNavigate();
@@ -42,6 +61,13 @@ export default function ChatWindow() {
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [busyThreadId, setBusyThreadId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  const [snippetOpen, setSnippetOpen] = useState<null | "code" | "table" | "formula">(null);
+  const [snippetText, setSnippetText] = useState("");
+  const [snippetLang, setSnippetLang] = useState("");
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
+  const [generatingImage, setGeneratingImage] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Persist active thread id so refresh restores the conversation.
   useEffect(() => {
@@ -156,20 +182,61 @@ export default function ChatWindow() {
       });
   }
 
+  async function handleFiles(e: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = "";
+    if (!files.length) return;
+    setError(null);
+    try {
+      const next: ChatAttachment[] = [];
+      for (const f of files) next.push(await fileToAttachment(f));
+      setAttachments((prev) => [...prev, ...next].slice(0, 10));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to read file");
+    }
+  }
+
+  function addSnippet() {
+    if (!snippetOpen || !snippetText.trim()) {
+      setSnippetOpen(null);
+      setSnippetText("");
+      setSnippetLang("");
+      return;
+    }
+    setAttachments((prev) =>
+      [
+        ...prev,
+        inlineSnippetAttachment(snippetOpen, snippetText, snippetLang || undefined),
+      ].slice(0, 10),
+    );
+    setSnippetOpen(null);
+    setSnippetText("");
+    setSnippetLang("");
+  }
+
   async function handleSend(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const text = input.trim();
-    if (!text || sending) return;
+    if ((!text && attachments.length === 0) || sending) return;
 
+    const messageText = text || "(see attachments)";
     const tempId = `tmp-${Date.now()}`;
-    setMessages((prev) => [...prev, { id: tempId, role: "user", content: text }]);
+    const sentAttachments = attachments;
+    const isImageRequest = IMAGE_INTENT_RE.test(messageText);
+    setMessages((prev) => [
+      ...prev,
+      { id: tempId, role: "user", content: messageText, attachments: sentAttachments },
+    ]);
     setInput("");
+    setAttachments([]);
     setSending(true);
+    setGeneratingImage(isImageRequest);
 
     try {
       const data = await api.post<ChatResponse>("/api/v1/chat/send", {
-        message: text,
+        message: messageText,
         thread_id: threadId,
+        attachments: sentAttachments,
       });
       setModel(data.model);
       setThreadId(data.thread_id);
@@ -181,22 +248,45 @@ export default function ChatWindow() {
           id: data.assistant_message_id,
           role: "assistant",
           content: data.reply,
+          serverAttachments: data.attachments,
         },
       ]);
       refreshThreads();
     } catch (err) {
-      const msg =
-        err instanceof ApiError
-          ? `Error ${err.status}: ${
-              (err.data as { detail?: string } | null)?.detail ?? "request failed"
-            }`
-          : "Network error — is the backend running?";
+      if (err instanceof ApiError && err.status === 401) {
+        localStorage.removeItem(ACTIVE_THREAD_KEY);
+        navigate("/login");
+        return;
+      }
+      let msg = "Network error \u2014 is the backend running?";
+      if (err instanceof ApiError) {
+        const data = err.data as
+          | { detail?: unknown }
+          | null;
+        const detail = data?.detail;
+        let detailText: string;
+        if (typeof detail === "string") {
+          detailText = detail;
+        } else if (Array.isArray(detail)) {
+          detailText = detail
+            .map((d: { loc?: unknown[]; msg?: string }) =>
+              d?.msg ? `${(d.loc ?? []).join(".")}: ${d.msg}` : JSON.stringify(d),
+            )
+            .join("; ");
+        } else if (detail !== undefined) {
+          detailText = JSON.stringify(detail);
+        } else {
+          detailText = "request failed";
+        }
+        msg = `Error ${err.status}: ${detailText}`;
+      }
       setMessages((prev) => [
         ...prev,
         { id: `err-${Date.now()}`, role: "assistant", content: msg },
       ]);
     } finally {
       setSending(false);
+      setGeneratingImage(false);
     }
   }
 
@@ -256,20 +346,68 @@ export default function ChatWindow() {
                 }`}
               >
                 <div
-                  className={`max-w-[75%] whitespace-pre-wrap rounded-2xl px-4 py-2 text-sm shadow-sm ${
+                  className={`max-w-[75%] rounded-2xl px-4 py-2 text-sm shadow-sm ${
                     m.role === "user"
                       ? "bg-blue-600 text-white"
                       : "border border-slate-200 bg-white text-slate-800"
                   }`}
                 >
-                  {m.content}
+                  {m.attachments && m.attachments.length > 0 && (
+                    <div className="mb-2">
+                      <AttachmentList items={m.attachments} />
+                    </div>
+                  )}
+                  {m.role === "assistant" ? (
+                    <RichContent content={m.content} />
+                  ) : (
+                    <div className="whitespace-pre-wrap">{m.content}</div>
+                  )}
+                  {m.serverAttachments && m.serverAttachments.length > 0 && (
+                    <div className="mt-2 flex flex-col gap-2">
+                      {m.serverAttachments.map((att, i) => {
+                        const src =
+                          att.url && att.url.startsWith("http")
+                            ? att.url
+                            : att.url
+                            ? `${API_BASE_URL}${att.url}`
+                            : undefined;
+                        return att.kind === "image" && src ? (
+                          <figure key={i} className="flex flex-col gap-1">
+                            <img
+                              src={src}
+                              alt={att.prompt ?? "generated image"}
+                              loading="lazy"
+                              className="max-w-full rounded-lg border border-slate-200"
+                            />
+                            <figcaption className="flex gap-3 text-xs text-slate-500">
+                              <a
+                                href={src}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="hover:underline"
+                              >
+                                Open in new tab
+                              </a>
+                              <a
+                                href={src}
+                                download
+                                className="hover:underline"
+                              >
+                                Download
+                              </a>
+                            </figcaption>
+                          </figure>
+                        ) : null;
+                      })}
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
             {sending && (
               <div className="flex justify-start">
                 <div className="rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm text-slate-500">
-                  Thinking…
+                  {generatingImage ? "Generating image\u2026" : "Thinking\u2026"}
                 </div>
               </div>
             )}
@@ -280,20 +418,145 @@ export default function ChatWindow() {
           onSubmit={handleSend}
           className="border-t border-slate-200 bg-white px-4 py-3"
         >
-          <div className="mx-auto flex max-w-3xl gap-2">
-            <input
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder="Type a message…"
-              className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
-            />
-            <button
-              type="submit"
-              disabled={sending || !input.trim()}
-              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              Send
-            </button>
+          <div className="mx-auto flex max-w-3xl flex-col gap-2">
+            {attachments.length > 0 && (
+              <AttachmentList
+                items={attachments}
+                onRemove={(i) =>
+                  setAttachments((prev) => prev.filter((_, idx) => idx !== i))
+                }
+              />
+            )}
+            {snippetOpen && (
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-2">
+                <div className="mb-1 flex items-center justify-between text-xs text-slate-600">
+                  <span className="font-semibold capitalize">
+                    Add {snippetOpen} snippet
+                  </span>
+                  {snippetOpen === "code" && (
+                    <input
+                      value={snippetLang}
+                      onChange={(e) => setSnippetLang(e.target.value)}
+                      placeholder="language (e.g. ts, py)"
+                      className="w-40 rounded border border-slate-300 px-2 py-0.5 text-xs"
+                    />
+                  )}
+                </div>
+                <textarea
+                  value={snippetText}
+                  onChange={(e) => setSnippetText(e.target.value)}
+                  rows={4}
+                  placeholder={
+                    snippetOpen === "formula"
+                      ? "e.g. \\frac{a}{b} = c"
+                      : snippetOpen === "table"
+                      ? "Paste CSV or Markdown table"
+                      : "Paste code"
+                  }
+                  className="w-full rounded border border-slate-300 p-2 font-mono text-xs focus:border-blue-500 focus:outline-none"
+                />
+                <div className="mt-1 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSnippetOpen(null);
+                      setSnippetText("");
+                      setSnippetLang("");
+                    }}
+                    className="rounded px-2 py-1 text-xs text-slate-600 hover:bg-slate-200"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={addSnippet}
+                    className="rounded bg-blue-600 px-2 py-1 text-xs font-semibold text-white hover:bg-blue-700"
+                  >
+                    Attach
+                  </button>
+                </div>
+              </div>
+            )}
+            <div className="flex gap-2">
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept="image/*,video/*,.csv,.xlsx,.xls,.tex,.mml,.txt,.md,.json,.js,.jsx,.ts,.tsx,.py,.java,.c,.cc,.cpp,.h,.cs,.go,.rs,.rb,.php,.sh,.sql,.yml,.yaml,.html,.css"
+                onChange={handleFiles}
+                className="hidden"
+              />
+              <div className="relative">
+                <button
+                  type="button"
+                  title="Add attachment"
+                  onClick={() => setAddMenuOpen((v) => !v)}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-lg leading-none text-slate-700 hover:bg-slate-100"
+                >
+                  +
+                </button>
+                {addMenuOpen && (
+                  <div
+                    className="absolute bottom-full left-0 z-10 mb-2 w-44 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg"
+                    onMouseLeave={() => setAddMenuOpen(false)}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAddMenuOpen(false);
+                        fileInputRef.current?.click();
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-100"
+                    >
+                      <span>📎</span> File / Image / Video
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAddMenuOpen(false);
+                        setSnippetOpen("code");
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-100"
+                    >
+                      <span>{"</>"}</span> Code snippet
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAddMenuOpen(false);
+                        setSnippetOpen("table");
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-100"
+                    >
+                      <span>⊞</span> Table
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAddMenuOpen(false);
+                        setSnippetOpen("formula");
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-100"
+                    >
+                      <span>∑</span> Formula (LaTeX)
+                    </button>
+                  </div>
+                )}
+              </div>
+              <input
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder="Type a message…"
+                className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+              />
+              <button
+                type="submit"
+                disabled={sending || (!input.trim() && attachments.length === 0)}
+                className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Send
+              </button>
+            </div>
           </div>
         </form>
       </div>
