@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { api, ApiError, API_BASE_URL } from "../../lib/api";
+import { api, ApiError, API_BASE_URL, persistAuthToken } from "../../lib/api";
 import type { LoginRequest, LoginResponse } from "../../types/auth";
 
 export default function LoginForm() {
@@ -21,8 +21,11 @@ export default function LoginForm() {
 
     try {
       const payload: LoginRequest = { username, password };
-      // The backend sets an httpOnly cookie. The token in the body is unused.
-      await api.post<LoginResponse>("/api/v1/auth/login", payload);
+      // The backend sets an httpOnly cookie *and* returns the JWT in the body.
+      // We persist the token so cross-origin streaming requests (which may not
+      // carry the cookie reliably) can authenticate via Authorization: Bearer.
+      const resp = await api.post<LoginResponse>("/api/v1/auth/login", payload);
+      if (resp?.access_token) persistAuthToken(resp.access_token);
       navigate("/");
     } catch (err) {
       if (err instanceof ApiError) {

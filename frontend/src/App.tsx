@@ -2,6 +2,12 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { useEffect, useState, type JSX } from "react";
 import LoginPage from "./pages/LoginPage";
 import ChatPage from "./pages/ChatPage";
+import ConnectionsPage from "./pages/sql/ConnectionsPage";
+import AskPage from "./pages/sql/AskPage";
+import SheetsHomePage from "./pages/sheets/SheetsHomePage";
+import SheetsAskPage from "./pages/sheets/SheetsAskPage";
+import ResearchPage from "./pages/research/ResearchPage";
+import TicTacToePage from "./pages/tictactoe/TicTacToePage";
 import { api, ApiError } from "./lib/api";
 
 function RequireAuth({ children }: { children: JSX.Element }) {
@@ -43,6 +49,54 @@ export default function App() {
           element={
             <RequireAuth>
               <ChatPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/sql/connections"
+          element={
+            <RequireAuth>
+              <ConnectionsPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/sql/ask"
+          element={
+            <RequireAuth>
+              <AskPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/sheets"
+          element={
+            <RequireAuth>
+              <SheetsHomePage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/sheets/:id/ask"
+          element={
+            <RequireAuth>
+              <SheetsAskPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/research"
+          element={
+            <RequireAuth>
+              <ResearchPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/tictactoe"
+          element={
+            <RequireAuth>
+              <TicTacToePage />
             </RequireAuth>
           }
         />

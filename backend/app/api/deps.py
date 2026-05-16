@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import Cookie, Depends, HTTPException, status
+from fastapi import Cookie, Depends, Header, HTTPException, status
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
@@ -17,21 +17,29 @@ from app.services.auth_service import get_user_by_id
 def get_current_user(
     db: Annotated[Session, Depends(get_db)],
     access_token: Annotated[str | None, Cookie()] = None,
+    authorization: Annotated[str | None, Header()] = None,
 ) -> User:
-    """Resolve the authenticated user from the httpOnly auth cookie.
+    """Resolve the authenticated user from the httpOnly auth cookie or a
+    ``Authorization: Bearer <jwt>`` header.
 
-    Note: the cookie name in the request must match `settings.auth_cookie_name`.
-    The `Cookie()` dependency reads the cookie by parameter name (`access_token`).
+    The cookie is the primary mechanism; the bearer header is accepted as a
+    fallback so cross-origin requests (e.g. SSE streams) that may not always
+    carry the cookie still authenticate.
     """
     settings = get_settings()
-    if not access_token:
+    token = access_token
+    if not token and authorization:
+        scheme, _, value = authorization.partition(" ")
+        if scheme.lower() == "bearer" and value:
+            token = value.strip()
+    if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
         )
     try:
         payload = jwt.decode(
-            access_token,
+            token,
             settings.jwt_secret_key,
             algorithms=[settings.jwt_algorithm],
         )

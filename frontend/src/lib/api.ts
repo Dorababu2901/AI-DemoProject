@@ -33,7 +33,25 @@ export class ApiError extends Error {
   }
 }
 
-let authTokenProvider: () => string | null = () => null;
+const AUTH_TOKEN_STORAGE_KEY = "auth_token";
+
+let authTokenProvider: () => string | null = () => {
+  try {
+    return localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+};
+
+/** Persist a token in localStorage so it survives reloads. */
+export function persistAuthToken(token: string | null): void {
+  try {
+    if (token) localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token);
+    else localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+  } catch {
+    /* ignore */
+  }
+}
 
 /**
  * Register a function that returns the current auth token (e.g. JWT).
@@ -41,6 +59,11 @@ let authTokenProvider: () => string | null = () => null;
  */
 export function setAuthTokenProvider(provider: () => string | null): void {
   authTokenProvider = provider;
+}
+
+/** Returns the current auth token from the registered provider, if any. */
+export function getAuthToken(): string | null {
+  return authTokenProvider();
 }
 
 async function request<T>({

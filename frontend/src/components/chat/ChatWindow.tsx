@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
-import { api, API_BASE_URL, ApiError } from "../../lib/api";
+import { Link, useNavigate } from "react-router-dom";
+import { api, API_BASE_URL, ApiError, persistAuthToken } from "../../lib/api";
 import {
   threadsApi,
   type ChatMessageRead,
@@ -181,6 +181,7 @@ export default function ChatWindow() {
       .post("/api/v1/auth/logout")
       .catch(() => undefined)
       .finally(() => {
+        persistAuthToken(null);
         localStorage.removeItem(ACTIVE_THREAD_KEY);
         navigate("/login");
       });
@@ -345,12 +346,38 @@ export default function ChatWindow() {
             <h1 className="text-lg font-semibold text-slate-800">Amzur AI Chat</h1>
             {model && <p className="text-xs text-slate-500">model: {model}</p>}
           </div>
-          <button
-            onClick={logout}
-            className="rounded-md border border-slate-300 px-3 py-1 text-sm text-slate-700 hover:bg-slate-100"
-          >
-            Sign out
-          </button>
+          <div className="flex items-center gap-2">
+            <Link
+              to="/sql/ask"
+              className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-1 text-sm text-emerald-700 hover:bg-emerald-100"
+            >
+              Talk to DB
+            </Link>
+            <Link
+              to="/sheets"
+              className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-1 text-sm text-emerald-700 hover:bg-emerald-100"
+            >
+              Talk to Sheets
+            </Link>
+            <Link
+              to="/research"
+              className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-1 text-sm text-emerald-700 hover:bg-emerald-100"
+            >
+              Research
+            </Link>
+            <Link
+              to="/tictactoe"
+              className="rounded-md border border-indigo-300 bg-indigo-50 px-3 py-1 text-sm text-indigo-700 hover:bg-indigo-100"
+            >
+              Tic Tac Toe
+            </Link>
+            <button
+              onClick={logout}
+              className="rounded-md border border-slate-300 px-3 py-1 text-sm text-slate-700 hover:bg-slate-100"
+            >
+              Sign out
+            </button>
+          </div>
         </header>
 
         {error && (

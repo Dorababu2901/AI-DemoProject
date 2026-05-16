@@ -62,8 +62,15 @@ class Settings(BaseSettings):
     litellm_proxy_url: str | None = None
     litellm_api_key: str | None = None
     default_llm_model: str = Field(default="gpt-4o-mini")
+    # Comma-separated fallback models tried in order if the primary 5xxs/timeouts.
+    # Example: "openai/gpt-4o-mini,claude-3-5-haiku-20241022"
+    llm_fallback_models: str = Field(default="")
     llm_temperature: float = Field(default=0.7)
     llm_max_tokens: int = Field(default=1024)
+
+    @property
+    def llm_fallback_models_list(self) -> list[str]:
+        return [m.strip() for m in self.llm_fallback_models.split(",") if m.strip()]
     # Image generation (routed through LiteLLM proxy when configured).
     # The Amzur LiteLLM proxy exposes Imagen as `gemini/imagen-4.0-fast-generate-001`.
     image_gen_model: str = Field(default="gemini/imagen-4.0-fast-generate-001")
@@ -112,6 +119,22 @@ class Settings(BaseSettings):
     rag_chunk_size: int = Field(default=800)       # ~ tokens-equivalent (chars/4 ≈ tokens)
     rag_chunk_overlap: int = Field(default=120)
     rag_max_pdf_bytes: int = Field(default=20 * 1024 * 1024)
+
+    # Google Sheets (Project 9 — sheetsfeature)
+    # Full JSON string of a Google Cloud service-account key (NOT a file path).
+    # The Sheet must be shared with the service-account email as Viewer.
+    google_service_account_json: str | None = None
+    # Where uploaded CSV/XLSX files and parquet snapshots are stored.
+    sheets_storage_dir: str = Field(default="storage/sheets")
+    sheets_max_upload_bytes: int = Field(default=50 * 1024 * 1024)
+    sheets_agent_max_iterations: int = Field(default=8)
+
+    # Project 10 — Research Digest Agent (researchfeature)
+    arxiv_base_url: str = Field(default="http://export.arxiv.org/api/query")
+    arxiv_max_results: int = Field(default=10)
+    agent_max_iterations: int = Field(default=6)
+    # Stop searching once this many sufficiently-relevant papers are gathered.
+    agent_evidence_threshold: int = Field(default=5)
 
     # CORS
     cors_origins: str = Field(default="http://localhost:5173")
